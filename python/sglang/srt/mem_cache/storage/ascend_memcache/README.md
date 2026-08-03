@@ -4,8 +4,7 @@ This document explains how to use **Ascend MemCache** as the L3 KV Cache backend
 
 Related documentation:
 
-- [Ascend MemCache Build Guide](https://gitcode.com/Ascend/memcache/blob/master/doc/build.md)
-- [Ascend MemCache Config Guide](https://gitcode.com/Ascend/memcache/blob/master/doc/memcache_config.md)
+- [Ascend MemCache QuickStart](https://gitcode.com/Ascend/memcache/blob/master/docs/devcontainer_quickstart.md)
 - [Ascend MemCache Python API](https://gitcode.com/Ascend/memcache/blob/master/doc/memcache_python_api.md)
 - [SGLang HiCache Design](https://docs.sglang.io/advanced_features/hicache_design.html)
 - [Ascend MemFabric](https://gitcode.com/Ascend/memfabric_hybrid)
