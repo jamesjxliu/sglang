@@ -1045,6 +1045,25 @@ class DecodePreallocQueue(DecodeHiCachePreallocMixin):
                 total_prefix_len = 0
                 required_alloc_tokens = self._pre_alloc_fill_len(decode_req.req)
 
+            # HiCache transfer savings diagnostic
+            if prefix_match is not None:
+                logger.info(
+                    f"[HiCache-D] rid={decode_req.req.rid} "
+                    f"origin_input_len={origin_input_len} "
+                    f"L1={prefix_match.l1_prefix_len} "
+                    f"L2={prefix_match.l2_host_hit_length} "
+                    f"L3={prefix_match.l3_storage_hit_length} "
+                    f"total_prefix={total_prefix_len} "
+                    f"transfer_delta={origin_input_len - total_prefix_len}"
+                )
+            else:
+                logger.info(
+                    f"[HiCache-D] rid={decode_req.req.rid} "
+                    f"origin_input_len={origin_input_len} "
+                    f"radix_cache=off total_prefix=0 "
+                    f"transfer_delta={origin_input_len} (full P->D transfer)"
+                )
+
             required_tokens_for_request = (
                 required_alloc_tokens + self.num_reserved_decode_tokens
             )

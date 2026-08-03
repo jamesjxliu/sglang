@@ -1599,16 +1599,27 @@ class HiRadixCache(RadixCache):
     def check_prefetch_progress(self, req_id: str) -> bool:
         if req_id not in self.ongoing_prefetch:
             # there is no ongoing prefetch for this request or it has been revoked
+            logger.info(
+                f"[HiCache-Prefetch] rid={req_id} no prefetch in progress "
+                f"(no L3 hit or already done), return True"
+            )
             return True
 
         last_host_node, prefetch_key, operation = self.ongoing_prefetch[req_id]
 
         if not self.can_terminate_prefetch(operation):
+            logger.info(
+                f"[HiCache-Prefetch] rid={req_id} prefetch in progress, "
+                f"waiting (L3->L2 DMA not done yet)"
+            )
             return False
 
         if operation.host_indices is None:
             # Stopping before host memory was committed (best_effort, timeout, or
             # still mid-query): signal the worker to stop, then release the request.
+            logger.info(
+                f"[HiCache-Prefetch] rid={req_id} revoked before host commit"
+            )
             self.cache_controller.terminate_prefetch(operation)
             self._revoke_pending_prefetch(req_id)
             return True
@@ -1616,7 +1627,11 @@ class HiRadixCache(RadixCache):
         completed_tokens, hash_value = self.cache_controller.terminate_prefetch(
             operation
         )
-        logger.debug(f"Prefetch {req_id} completed with {completed_tokens} tokens")
+        logger.info(
+            f"[HiCache-Prefetch] rid={req_id} completed: "
+            f"completed_tokens={completed_tokens} "
+            f"prefetch_key_len={len(prefetch_key)}"
+        )
 
         min_completed_tokens = self._sync_and_clamp_prefetch_result(
             operation, completed_tokens
@@ -1644,6 +1659,13 @@ class HiRadixCache(RadixCache):
         # Track tokens actually loaded from storage for this request (L3 hits)
         loaded_from_storage = min_completed_tokens - matched_length
         self.prefetch_loaded_tokens_by_reqid[req_id] = loaded_from_storage
+
+        logger.info(
+            f"[HiCache-Prefetch] rid={req_id} done: "
+            f"matched_length={matched_length} "
+            f"loaded_from_storage={loaded_from_storage} "
+            f"(L3 tokens loaded into L2)"
+        )
 
         if self.enable_storage_metrics:
             self.storage_metrics_collector.log_prefetched_tokens(loaded_from_storage)
