@@ -126,6 +126,15 @@ class DeepEPMoE(FusedMoE):
         ):
             self.deprecate_flag = True
         elif (
+            deep_gemm_wrapper.ENABLE_JIT_DEEPGEMM
+            and get_moe_runner_backend().is_deep_gemm()
+            and quant_config is not None
+            and quant_config.get_name() == "mxfp4"
+        ):
+            # MXFP4 experts (e.g. Kimi K3) on the DeepGEMM fp8_fp4 W4A8 path:
+            # route through the modern FusedMoE runner (Mxfp4MoEMethod.apply).
+            self.deprecate_flag = True
+        elif (
             quant_config is None
             and self.w13_weight.dtype == torch.bfloat16
             and get_moe_runner_backend().is_deep_gemm()
@@ -245,6 +254,21 @@ class DeepEPMoE(FusedMoE):
         topk_output: TopKOutput,
     ):
 
+        # MoE DRAM offload: load ALL local experts from Host DRAM to HBM.
+        # FusedMoE.forward() is bypassed in the DeepEP path, so the
+        # _load_experts_on_demand call must be replicated here.
+        # In decode mode, skip — the w4a8 DeepEP path calls
+        # group_pack_copy_active_weights which compacts active expert
+        # weights on-device post-dispatch. Calling _load_experts_on_demand
+        # here would allocate a [num_local_experts, ...] buffer and load
+        # all experts, only to be immediately overwritten.
+        if (
+            getattr(self, "_dram_offload_enabled", False)
+            and self._expert_weight_store is not None
+            and not self._expert_weight_store._is_decode_mode
+        ):
+            self._load_experts_on_demand(topk_output)
+
         if self.deprecate_flag:
             return super().forward_impl(
                 hidden_states,
@@ -322,7 +346,7 @@ class DeepEPMoE(FusedMoE):
         self,
         dispatch_output: DeepEPNormalDispatchOutput,
     ):
-        assert self.moe_runner_config.activation == "silu"
+        assert self.moe_runner_config.activation in ("silu", "situ")
         assert isinstance(self.quant_method, W4AFp8MoEMethod)
         return self.quant_method.apply_deepep_normal(
             layer=self,
@@ -333,7 +357,7 @@ class DeepEPMoE(FusedMoE):
         self,
         dispatch_output: DeepEPLLDispatchOutput,
     ):
-        assert self.moe_runner_config.activation == "silu"
+        assert self.moe_runner_config.activation in ("silu", "situ")
         assert isinstance(self.quant_method, W4AFp8MoEMethod)
         return self.quant_method.apply_deepep_ll(
             layer=self,

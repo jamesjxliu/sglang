@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import logging
+import os
 from contextlib import suppress
 from typing import (
     TYPE_CHECKING,
@@ -53,6 +54,7 @@ from sglang.srt.layers.quantization.compressed_tensors.schemes import (
     CompressedTensorsWNA16MoE,
     CompressedTensorsWNA16TritonMoE,
     NPUCompressedTensorsW4A8Int8DynamicMoE,
+    NPUCompressedTensorsW4A8mxfp4MoE,
     NPUCompressedTensorsW4A16Int4DynamicMoE,
     NPUCompressedTensorsW8A8Int8,
     NPUCompressedTensorsW8A8Int8DynamicMoE,
@@ -68,6 +70,7 @@ from sglang.srt.layers.quantization.unquant import (
     UnquantizedLinearMethod,
 )
 from sglang.srt.utils import is_cuda, is_hip, is_npu
+from sglang.srt.utils.common import get_bool_env_var
 
 _is_cuda = is_cuda()
 _is_npu = is_npu()
@@ -178,6 +181,17 @@ class CompressedTensorsConfig(QuantizationConfig):
         from sglang.srt.layers.moe.fused_moe_triton import FusedMoE
 
         if isinstance(layer, FusedMoE):
+            # Detect MXFP4 before the scheme-based path: MXFP4 uses a
+            # dedicated FusedMoEMethodBase (Mxfp4MoEMethod) that already
+            # handles all MoE backends, bypassing the scheme abstraction.
+            if self._is_mxfp4_moe(layer_name=prefix) and not get_bool_env_var("SGLANG_W4A8_MXFP4_MOE"):
+                from sglang.srt.layers.quantization.mxfp4 import Mxfp4MoEMethod
+
+                logger.info_once(
+                    "Using Mxfp4MoEMethod for MXFP4 compressed-tensors MoE"
+                )
+                return Mxfp4MoEMethod(prefix=prefix)
+
             layer.scheme = self.get_moe_scheme(layer=layer, layer_name=prefix)
             if layer.scheme is None:  # ignored layer
                 use_triton_kernels = get_moe_runner_backend().is_triton_kernels()
@@ -559,6 +573,28 @@ class CompressedTensorsConfig(QuantizationConfig):
 
         return is_mxint4 and input_quant_none and is_symmetric and is_static
 
+    def _is_mxfp4_moe(self, layer_name: str) -> bool:
+        """Detect MXFP4-quantized MoE from global format or target scheme."""
+        if "mxfp4" in (self.quant_format or ""):
+            return True
+        self._add_fused_moe_to_target_scheme_map()
+        for key in ["FusedMoE", "Linear"]:
+            scheme = self.target_scheme_map.get(key)
+            if scheme is None:
+                continue
+            wq = scheme.get("weights")
+            if wq is None:
+                continue
+            if (
+                wq.num_bits == 4
+                and wq.type == QuantizationType.FLOAT
+                and wq.strategy == QuantizationStrategy.GROUP.value
+                and wq.group_size == 32
+                and wq.symmetric
+            ):
+                return True
+        return False
+
     def _is_dynamic_token_w4(
         self, weight_quant: BaseModel, input_quant: BaseModel
     ) -> bool:
@@ -752,6 +788,13 @@ class CompressedTensorsConfig(QuantizationConfig):
                     self._is_dynamic_token_w4(weight_quant, input_quant)
                     and input_quant is None
                 ):
+                    if self.quant_format == "mxfp4-pack-quantized":
+                        if os.getenv("SGLANG_W4A8_MXFP4_MOE"):
+                            return NPUCompressedTensorsW4A8mxfp4MoE()
+                        else:
+                            raise NotImplementedError(
+                                f"The {self.quant_format} only support W4A16_MXFP4 or W4A8_MXFP4 scheme now."
+                            )
                     logger.info_once("Using NPUCompressedTensorsW4A16Int4DynamicMoE")
                     return NPUCompressedTensorsW4A16Int4DynamicMoE(self)
         elif self._is_fp4a4_nvfp4(weight_quant, input_quant):
