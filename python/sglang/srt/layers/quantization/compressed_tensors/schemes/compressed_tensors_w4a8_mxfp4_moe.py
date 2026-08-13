@@ -192,6 +192,29 @@ class NPUCompressedTensorsW4A8mxfp4MoE(CompressedTensorsMoEScheme):
         if combine_input is not None:
             return combine_input
 
+        # AscendTP dispatch: routing already done by dispatcher (init_routing),
+        # hidden_states are already permuted. Use without-routing GMM path.
+        if dispatch_output.format.is_ascend_tp():
+            from sglang.srt.layers.moe.token_dispatcher.ascend_tp import (
+                AscendTPCombineInput,
+            )
+
+            is_nz_stored = getattr(layer, "_is_nz_stored", False)
+            is_nd_format = getattr(layer, "_dram_offload_enabled", False) and not is_nz_stored
+
+            output = npu_apply_without_routing_weights_w4a8_mxfp4(
+                layer,
+                dispatch_output.hidden_states,
+                dispatch_output.hidden_states_scale,
+                dispatch_output.group_list_type,
+                dispatch_output.expert_tokens,
+                torch.bfloat16,
+                act_fn=self.act_fn,
+                is_nd_format=is_nd_format,
+                is_nz_stored=is_nz_stored,
+            )
+            return AscendTPCombineInput(hidden_states=output)
+
         from sglang.srt.layers.moe.token_dispatcher import StandardCombineInput
 
         hidden_states = dispatch_output.hidden_states

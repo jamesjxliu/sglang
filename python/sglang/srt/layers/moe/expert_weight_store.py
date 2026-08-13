@@ -331,7 +331,8 @@ class ExpertWeightStore:
 
         config = offload.OffloadConfig()
         config.device_id = torch.npu.current_device()
-        config.size = self._dram_pool_size_bytes
+        config.reserve_size = self._dram_pool_size_bytes
+        config.alloc_size = self._dram_pool_size_bytes
 
         logger.info(
             f"[ExpertWeightStore] acc_offload init attempt 1/1 "
