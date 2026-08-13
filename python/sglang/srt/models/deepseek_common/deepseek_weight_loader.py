@@ -207,6 +207,18 @@ class DeepseekV2WeightLoaderMixin:
 
             for name, loaded_weight in weights:
                 use_async_loading = should_async_load(loaded_weight)
+                # Force synchronous loading when MoE DRAM offload is enabled:
+                # async loading uses futures + mmap which doubles Host RAM
+                # (param + mmap). With DRAM offload, the param CPU tensor
+                # is released immediately after copy_ to param, allowing
+                # drop_cache_after_load's DONTNEED to reclaim page cache.
+                # Without this, peak Host RAM = param(900G) + futures mmap(900G) ≈ 1.8T.
+                from sglang.srt.server_args import get_global_server_args
+                _force_sync = getattr(
+                    get_global_server_args(), "moe_dram_offload", False
+                )
+                if _force_sync:
+                    use_async_loading = False
                 layer_id = get_layer_id(name)
                 if (
                     layer_id is not None

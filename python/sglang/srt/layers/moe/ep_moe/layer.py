@@ -259,6 +259,16 @@ class DeepEPMoE(FusedMoE):
                 topk_output,
             )
 
+        # MoE DRAM offload: load ALL local experts from Host DRAM to HBM
+        # via group_pack_copy (prefill only; decode uses
+        # group_pack_copy_active_weights post-dispatch).
+        if (
+            getattr(self, "_dram_offload_enabled", False)
+            and self._expert_weight_store is not None
+            and not self._expert_weight_store._is_decode_mode
+        ):
+            self._load_experts_on_demand(topk_output)
+
         dispatch_output = self.dispatcher.dispatch(
             hidden_states=hidden_states, topk_output=topk_output
         )
