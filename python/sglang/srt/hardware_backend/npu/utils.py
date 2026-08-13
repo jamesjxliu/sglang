@@ -250,6 +250,59 @@ def set_default_server_args(args: "ServerArgs"):
             args.hicache_mem_layout = "page_first_direct"
 
 
+def _patch_npu_uniform_():
+    """Workaround for NPU op-plugin bug where uniform_() creates a seed
+    tensor with int64 dtype, but CANN's aclnnInplaceUniformTensor requires
+    uint64.  This causes ``seedTensor dtype must be DT_UINT64, got DT_INT64``
+    errors during cuda graph capture (e.g. when exponential_() is called
+    inside the DSPARK draft sampler).
+
+    The patch replaces ``torch.Tensor.uniform_`` on NPU with a simple PRNG
+    based on basic tensor operations (LCG) that bypass the buggy kernel.
+    Non-NPU tensors fall through to the original implementation.
+    """
+    _orig_uniform_ = torch.Tensor.uniform_
+
+    def _patched_uniform_(self, from_=0.0, to=1.0, *, generator=None):
+        if self.device.type != "npu":
+            return _orig_uniform_(self, from_, to, generator=generator)
+
+        # LCG-based PRNG with per-element seeds derived from the tensor's
+        # data_ptr and element index, so different tensors (and different
+        # elements within a tensor) get different pseudo-random values.
+        base_seed = (self.data_ptr() ^ (self.numel() * 2654435761)) & 0x7FFFFFFF
+
+        n = self.numel()
+        idx = torch.arange(n, device=self.device, dtype=torch.int64)
+        state = (base_seed + idx) & 0x7FFFFFFF
+        # Two LCG rounds for better bit mixing.
+        state = (1103515245 * state + 12345) & 0x7FFFFFFF
+        state = (1103515245 * state + 12345) & 0x7FFFFFFF
+
+        u = state.to(torch.float32) / float(0x7FFFFFFF)
+        self.copy_((from_ + u * (to - from_)).view(self.shape))
+        return self
+
+    torch.Tensor.uniform_ = _patched_uniform_
+
+    # exponential_() on NPU may dispatch directly to a CANN kernel that
+    # internally calls uniform_, bypassing the Python patch above.
+    # Patch it to use our uniform_ implementation.
+    _orig_exponential_ = torch.Tensor.exponential_
+
+    def _patched_exponential_(self, lambd=1.0, *, generator=None):
+        if self.device.type != "npu":
+            return _orig_exponential_(self, lambd, generator=generator)
+        # Generate uniform [0, 1) via patched uniform_, then transform:
+        #   exp = -log(1 - U) / lambd
+        self.uniform_(0.0, 1.0, generator=generator)
+        self.clamp_(0.0, 1.0 - 1e-7)
+        self.copy_(-torch.log(1.0 - self) / lambd)
+        return self
+
+    torch.Tensor.exponential_ = _patched_exponential_
+
+
 @_call_once
 def init_npu_backend():
     """
@@ -272,6 +325,8 @@ def init_npu_backend():
 
     torch_npu.npu.config.allow_internal_format = True
     torch_npu.npu.set_compile_mode(jit_compile=False)
+
+    _patch_npu_uniform_()
 
 
 def _is_nz_aligned(tensor: torch.Tensor) -> bool:
