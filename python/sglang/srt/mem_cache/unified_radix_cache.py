@@ -412,6 +412,7 @@ class UnifiedRadixCache(BasePrefixCache):
     def match_prefix(self, params: MatchPrefixParams) -> MatchResult:
         result = self.session.try_match_prefix(params)
         if result is not None:
+            # print(f"[UnifiedRadixCache] try_match_prefix: {result}")
             return result
         if self.disable:
             return self.tree_core.empty_match_result
@@ -423,6 +424,7 @@ class UnifiedRadixCache(BasePrefixCache):
             result = component.finalize_match_result_in_cache(params, result)
         # Finalizers must not emit actions; the walk's were applied above.
         assert not result.cache_actions
+        # print(f"[UnifiedRadixCache] match_prefix: {len(result.device_indices)=}, {result.host_hit_length=}, {result.mamba_host_hit_length=}")
         return result
 
     def insert(self, params: InsertParams) -> InsertResult:
