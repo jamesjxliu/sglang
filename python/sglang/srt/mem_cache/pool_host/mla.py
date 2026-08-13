@@ -450,9 +450,13 @@ class MLATokenToKVPoolHost(HiSparseHostPoolMixin, HostKVCache):
                 )
             return
 
-        device_data_ptrs, device_kv_buffers = self._resolve_device_transfer_buffers(
-            device_pool
-        )
+        # data_ptrs/kv_buffers are only needed by the kernel/direct backends;
+        # kernel_ascend (NPU) uses k_buffer/v_buffer/index_k_buffer instead and
+        # NPU device pools do not expose data_ptrs.
+        if io_backend != "kernel_ascend":
+            device_data_ptrs, device_kv_buffers = self._resolve_device_transfer_buffers(
+                device_pool
+            )
 
         if io_backend == "kernel":
             if self.layout == "layer_first":

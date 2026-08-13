@@ -459,11 +459,15 @@ class MambaPoolHost(HostKVCache):
                 page_size=1,
             )
         elif io_backend == "kernel_ascend":
-            # NPU fallback: no dedicated mamba host-transfer kernel, use torch indexing.
-            # Keep each indexing op's buffer/index/value on the same device, as
-            # torch_npu rejects mixed-device advanced indexing.
-            dst[dst_indices.to(dst.device)] = src[src_indices.to(src.device)].to(
-                dst.device
+            # NPU: mirror the load path — the dedicated kernel transfers all
+            # layers at once via a single 2D strided copy
+            # (device layer-first -> host page-first).
+            transfer_mamba_state(
+                device_buf=src_layers,
+                host_buf=dst,
+                device_indices=src_indices,
+                host_indices=dst_indices,
+                direction=TransferDirection.D2H,
             )
         else:
             raise ValueError(f"Unsupported io_backend: {io_backend}")
