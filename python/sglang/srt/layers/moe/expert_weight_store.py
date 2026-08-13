@@ -461,19 +461,35 @@ class ExpertWeightStore:
         (torch copy_()/.cpu() fail with "do not support internal format").
         The kernel operates on raw bytes, preserving the NZ block layout.
 
-        Requires even num_pairs; split into 2 halves for odd-sized tensors.
+        Splits into chunks <= 2 GB so each length fits in int32
+        (the C++ kernel uses uint32_t, but torch.int32 tensor creation
+        rejects values > 2^31-1).
         """
         storage_size = src_npu_tensor.element_size() * src_npu_tensor.numel()
-        half = storage_size // 2
-        src_ptrs = [src_npu_tensor.data_ptr(), src_npu_tensor.data_ptr() + half]
-        dst_ptrs = [dst_dram_tensor.data_ptr(), dst_dram_tensor.data_ptr() + half]
-        len_ptrs = [half, half]
+        # Max chunk must fit in int32 (max 2^31-1 = 2,147,483,647).
+        max_chunk = 2**31 - 1
+        num_chunks = max(1, (storage_size + max_chunk - 1) // max_chunk)
+        chunk_size = storage_size // num_chunks
+        remainder = storage_size - chunk_size * num_chunks
+
+        src_base = src_npu_tensor.data_ptr()
+        dst_base = dst_dram_tensor.data_ptr()
+        src_ptrs = []
+        dst_ptrs = []
+        len_ptrs = []
+        offset = 0
+        for i in range(num_chunks):
+            sz = chunk_size + (remainder if i == num_chunks - 1 else 0)
+            src_ptrs.append(src_base + offset)
+            dst_ptrs.append(dst_base + offset)
+            len_ptrs.append(sz)
+            offset += sz
 
         target_device = torch.device(f"npu:{torch.npu.current_device()}")
         src_ptr_t = torch.tensor(src_ptrs, dtype=torch.int64, device=target_device)
         dst_ptr_t = torch.tensor(dst_ptrs, dtype=torch.int64, device=target_device)
         len_t = torch.tensor(len_ptrs, dtype=torch.int32, device=target_device)
-        size_t = torch.tensor(2, dtype=torch.int32, device=target_device)
+        size_t = torch.tensor(num_chunks, dtype=torch.int32, device=target_device)
 
         ret = self._offload.sparse_copy(src_ptr_t, dst_ptr_t, len_t, size_t, target_device)
         if ret != 0:
