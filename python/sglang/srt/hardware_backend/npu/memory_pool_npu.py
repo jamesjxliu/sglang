@@ -127,6 +127,11 @@ class NPUMHATokenToKVPool(MHATokenToKVPool):
                 dtype=self.store_dtype,
                 device=self.device,
             )
+            # Keep a reference to the 5-D contiguous tensor for HiCache
+            # D2H/H2D transfers (transfer_kv_dim_exchange expects a 5-D
+            # tensor, not the per-layer list used in FIA mode below).
+            self.k_buffer_5d = self.k_buffer
+            self.v_buffer_5d = self.v_buffer
 
             if self.use_fia:
                 # Use per-layer Python lists to avoid torch.compile capturing
@@ -436,6 +441,10 @@ class NPUMHATokenToKOnlyPool(MHATokenToKOnlyPool):
                 dtype=self.store_dtype,
                 device=self.device,
             )
+            # Keep a reference to the 5-D contiguous tensor for HiCache
+            # D2H/H2D transfers (transfer_kv_dim_exchange expects a 5-D
+            # tensor, not the per-layer list used in FIA mode below).
+            self.k_buffer_5d = self.k_buffer
             if self.use_fia:
                 self.k_buffer = [
                     self.k_buffer[i].view(-1, 1, self.head_num, self.head_dim)
