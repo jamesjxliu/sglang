@@ -1,0 +1,70 @@
+python/sglang/srt/disaggregation/decode_hicache_mixin.py
+  s_4a19828cef8892::t_09487515552d69 213-216,224
+python/sglang/srt/disaggregation/decode_kvcache_offload_manager.py
+  s_4a19828cef8892::t_6f2a3621b1c24e 32
+  s_4a19828cef8892::t_ef7aee86ed6231 258-263,265-271,274,284
+  s_4a19828cef8892::t_09487515552d69 21-22,63-68,256-257,264,272-273,275-283,285-296,300-306
+  s_4a19828cef8892::t_9236df231598d5 307
+python/sglang/srt/mem_cache/hybrid_cache/hybrid_pool_assembler.py
+  s_4a19828cef8892::t_91d6bf625bf81c 830
+  s_4a19828cef8892::t_09487515552d69 816-824,1077-1082
+python/sglang/srt/mem_cache/pool_host/mamba.py
+  s_4a19828cef8892::t_06dca557324ae6 48-51,65-72,79-80,83-90,97-98
+  s_4a19828cef8892::t_a0269326cd21b5 45-47,52-64,73-78,81-82,91-96,99-101
+  s_4a19828cef8892::t_09487515552d69 21,25,38-43,389-395,436-442,486,502-509,511-514,567,570-573,582-603
+  s_4a19828cef8892::t_71285d19482bdc 537-538,540-541,543-544,550-551,553-558,561
+  s_4a19828cef8892::t_a100cddc777240 494-501
+  s_4a19828cef8892::t_d3a07528f20b6f 539,542,545-546,549
+  s_4a19828cef8892::t_bed27464711cac 487-493,510
+  s_4a19828cef8892::t_89fc05819ef1d0 529-536,547-548,552,559-560,562-566,568-569,574-581
+  s_4a19828cef8892::t_bcdda46a9426f3 44
+python/sglang/srt/mem_cache/memory_pool.py
+  s_4a19828cef8892::t_09487515552d69 3976
+python/sglang/srt/mem_cache/pool_host/npu_memfabric.py
+  s_4a19828cef8892::t_c0a367b03eec4a 9
+python/sglang/srt/mem_cache/pool_host/mla.py
+  s_4a19828cef8892::t_947224cf0e4765 721,945
+python/sglang/srt/disaggregation/decode.py
+  s_4a19828cef8892::t_09487515552d69 1196-1208
+python/sglang/srt/mem_cache/common.py
+  s_4a19828cef8892::t_a520e4042c3235 297-299
+  s_4a19828cef8892::t_09487515552d69 300-302
+python/sglang/srt/managers/cache_controller.py
+  s_4a19828cef8892::t_64501bea241484 878,882
+python/sglang/srt/mem_cache/pool_host/base.py
+  h_28985eff983438 176-177
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.2",
+  "base_commit_sha": "990cd9251bbd7b111e34b9ef531cc98898429bb8",
+  "prompts": {},
+  "humans": {
+    "h_28985eff983438": {
+      "author": "james88liu <liujianxing1@huawei.com>"
+    }
+  },
+  "sessions": {
+    "s_4a19828cef8892": {
+      "agent_id": {
+        "tool": "trae",
+        "id": "6aa4fa7fa0df6b206b5490a7",
+        "model": "glm-5.2__dev"
+      },
+      "human_author": "james88liu <liujianxing1@huawei.com>",
+      "custom_attributes": {
+        "runtime_client": "trae-tob-git-ai",
+        "tool_use_id": "6aa7473ba0df6b206b54935c",
+        "dedupe_key": "6aa4fa7fa0df6b206b5490a7:6aa7473ba0df6b206b54935c:afterEdit:e2d444ad",
+        "edit_kind": "file_edit",
+        "source_scene": "unknown",
+        "session_id": "6aa4fa7fa0df6b206b5490a7",
+        "client_type": "ide",
+        "tool_type": "agent",
+        "external_session_id": "6aa4fa7fa0df6b206b5490a7",
+        "operation_id": "6aa7473ba0df6b206b54935c",
+        "tool_id": "Edit"
+      }
+    }
+  }
+}
