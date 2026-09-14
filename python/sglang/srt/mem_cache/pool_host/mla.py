@@ -32,7 +32,6 @@ from sglang.srt.mem_cache.pool_host.common import (
 from sglang.srt.mem_cache.pool_host.hisparse import HiSparseHostPoolMixin
 from sglang.srt.mem_cache.pool_host.npu_memfabric import (
     alloc_with_memfabric,
-    ascendc_io_enabled,
     ensure_memfabric_capacity,
     memfabric_host_memory_enabled,
     to_device_no_sync,
@@ -719,7 +718,7 @@ class MLATokenToKVPoolHost(HiSparseHostPoolMixin, HostKVCache):
                 raise ValueError(f"Unsupported layout: {self.layout}")
         elif io_backend == "kernel_ascend":
             if self.layout == "page_first_kv_split":
-                if _is_npu and ascendc_io_enabled():
+                if _is_npu and memfabric_host_memory_enabled():
                     # The per-layer complete(i) event recorded by the caller lets
                     # later layers' DMA overlap the current layer's compute.
                     ik_start, ik_num = self._indexer_slot_range_for_layer(
@@ -943,7 +942,7 @@ class MLATokenToKVPoolHost(HiSparseHostPoolMixin, HostKVCache):
                 raise ValueError(f"Unsupported layout: {self.layout}")
         elif io_backend == "kernel_ascend":
             if self.layout == "page_first_kv_split":
-                if _is_npu and ascendc_io_enabled():
+                if _is_npu and memfabric_host_memory_enabled():
                     self._transfer_ascendc_sparse_copy(
                         device_pool,
                         host_indices,

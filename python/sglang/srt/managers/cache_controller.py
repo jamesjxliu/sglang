@@ -875,11 +875,11 @@ class HiCacheController:
                 )
         elif self.io_backend == "kernel_ascend":
             from sglang.srt.mem_cache.pool_host.npu_memfabric import (
-                ascendc_io_enabled,
+                memfabric_host_memory_enabled,
                 to_device_no_sync,
             )
 
-            if ascendc_io_enabled():
+            if memfabric_host_memory_enabled():
                 # The fused acc_offload kv_exchange kernel reads the token
                 # indices directly on the device; keeping them there avoids
                 # the D2H sync that would serialize the layer-group pipeline.

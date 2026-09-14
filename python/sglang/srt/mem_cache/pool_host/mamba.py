@@ -18,10 +18,11 @@ from sglang.srt.mem_cache.pool_host.common import (
     ALLOC_MEMORY_FUNCS,
     get_allocator_from_storage,
 )
-from sglang.srt.utils import is_cuda, is_hip
+from sglang.srt.utils import is_cuda, is_hip, is_npu
 
 _is_cuda = is_cuda()
 _is_hip = is_hip()
+_is_npu = is_npu()
 if _is_cuda or _is_hip:
     from sgl_kernel.kvcacheio import (
         transfer_kv_all_layer_direct_lf_pf,
@@ -34,6 +35,70 @@ if _is_cuda or _is_hip:
         transfer_kv_mamba_lf_pf,
         transfer_kv_mamba_pf_lf,
     )
+if _is_npu:
+    from sgl_kernel_npu.kvcacheio import TransferDirection
+    try:
+        from sgl_kernel_npu.kvcacheio import transfer_mamba_state
+    except ImportError:
+        transfer_mamba_state = None
+
+    # Detect the fused AIV mamba_exchange_copy from memfabric_hybrid.  This
+    # launches a single kernel for all state buffers (temporal + conv[0..n]),
+    # eliminating the per-buffer and per-index launch overhead of the legacy
+    # transfer_mamba_state path.  The kernel accepts a [layer_lo, layer_hi)
+    # range so the caller can transfer one layer at a time, allowing one
+    # layer's DMA to overlap with another layer's compute (mirroring the
+    # kv_exchange_copy usage in mla.py).
+    _mamba_exchange_available = False
+    _mamba_exchange_copy_h2d = None
+    _mamba_exchange_copy_d2h = None
+    try:
+        from memfabric_hybrid import offload as _offload
+        from memfabric_hybrid.mf_acc_offload import (
+            MAMBA_DIRECTION_H2D as _MAMBA_DIR_H2D,
+            MAMBA_DIRECTION_D2H as _MAMBA_DIR_D2H,
+        )
+
+        if hasattr(_offload, "mamba_exchange_copy"):
+            _mamba_exchange_available = True
+
+            def _mamba_exchange_copy_h2d(
+                device_bufs,
+                host_bufs,
+                device_indices,
+                host_indices,
+                layer_lo=None,
+                layer_hi=None,
+            ):
+                _offload.mamba_exchange_copy(
+                    device_bufs=device_bufs,
+                    host_bufs=host_bufs,
+                    device_indices=device_indices,
+                    host_indices=host_indices,
+                    direction=_MAMBA_DIR_H2D,
+                    layer_lo=layer_lo,
+                    layer_hi=layer_hi,
+                )
+
+            def _mamba_exchange_copy_d2h(
+                device_bufs,
+                host_bufs,
+                device_indices,
+                host_indices,
+                layer_lo=None,
+                layer_hi=None,
+            ):
+                _offload.mamba_exchange_copy(
+                    device_bufs=device_bufs,
+                    host_bufs=host_bufs,
+                    device_indices=device_indices,
+                    host_indices=host_indices,
+                    direction=_MAMBA_DIR_D2H,
+                    layer_lo=layer_lo,
+                    layer_hi=layer_hi,
+                )
+    except ImportError:
+        pass
 
 logger = logging.getLogger(__name__)
 
@@ -321,6 +386,13 @@ class MambaPoolHost(HostKVCache):
                 dst_indices=dst_indices,
                 page_size=1,
             )
+        elif io_backend == "kernel_ascend":
+            # Per-layer indexed copy: this method transfers a single layer
+            # (layer_first layout). The all-layer kernel path is handled by
+            # _copy_tensor_all_layers_lf_pf / load_to_device_per_layer.
+            dst[dst_indices.to(dst.device)] = src[src_indices.to(src.device)].to(
+                dst.device
+            )
         else:
             raise ValueError(f"Unsupported io_backend: {io_backend}")
 
@@ -361,6 +433,13 @@ class MambaPoolHost(HostKVCache):
                 layer_id=layer_id,
                 page_size=1,
             )
+        elif io_backend == "kernel_ascend":
+            # NPU fallback: page-first host buffer -> per-layer device buffer.
+            # host buffer layout is (size, num_layers, 1, *shape); the trailing 1
+            # is the page placeholder dim, so index it out explicitly.
+            dst[dst_indices.to(dst.device)] = src[
+                src_indices.to(src.device), layer_id, 0
+            ].to(dst.device)
         else:
             raise ValueError(f"Unsupported io_backend: {io_backend}")
 
@@ -404,6 +483,35 @@ class MambaPoolHost(HostKVCache):
                 dst_indices=dst_indices,
                 page_size=1,
             )
+        elif io_backend == "kernel_ascend":
+            # NPU: device layer-first -> host page-first.  Prefer the fused
+            # AIV kernel (offload.mamba_exchange_copy) which launches a single
+            # kernel for all state buffers; fall back to the per-buffer
+            # transfer_mamba_state, then to a per-layer Python loop.
+            # Note: this all-layers entry point is called once per state
+            # buffer by backup_from_device_all_layer; layer_lo/layer_hi stay
+            # at None so the whole [0, num_layers) range is transferred.
+            if _mamba_exchange_available:
+                _mamba_exchange_copy_d2h(
+                    device_bufs=[src_layers],
+                    host_bufs=[dst],
+                    device_indices=src_indices,
+                    host_indices=dst_indices,
+                )
+            elif transfer_mamba_state is not None:
+                transfer_mamba_state(
+                    device_buf=src_layers,
+                    host_buf=dst,
+                    device_indices=src_indices,
+                    host_indices=dst_indices,
+                    direction=TransferDirection.D2H,
+                )
+            else:
+                # Per-layer fallback when no dedicated kernel is available.
+                for lid in range(num_layers):
+                    dst[dst_indices.to(dst.device), lid, 0] = src_layers[
+                        lid
+                    ][src_indices.to(dst.device)].to(dst.device)
         else:
             raise ValueError(f"Unsupported io_backend: {io_backend}")
 
@@ -418,27 +526,81 @@ class MambaPoolHost(HostKVCache):
         is_draft: bool = False,
     ):
         if self.layout in ["page_first", "page_first_direct"]:
-            # no ssm state on conv-only models: nothing to transfer
-            if self.temporal_state_elem_size > 0:
-                self._copy_tensor_pf_lf(
-                    src=self.temporal_buffer,
-                    dst=device_pool.mamba_cache.temporal[layer_id],
-                    src_indices=host_indices,
-                    dst_indices=device_indices,
-                    layer_id=layer_id,
-                    num_layers=self.num_mamba_layers,
-                    io_backend=io_backend,
-                )
-            for conv_idx in range(len(self.conv_state_shapes)):
-                self._copy_tensor_pf_lf(
-                    src=self.conv_buffer[conv_idx],
-                    dst=device_pool.mamba_cache.conv[conv_idx][layer_id],
-                    src_indices=host_indices,
-                    dst_indices=device_indices,
-                    layer_id=layer_id,
-                    num_layers=self.num_mamba_layers,
-                    io_backend=io_backend,
-                )
+            if io_backend == "kernel_ascend":
+                if _mamba_exchange_available:
+                    # NPU fused path: a single AIV kernel per layer transfers
+                    # all state buffers (temporal + conv[0..n]) of that layer
+                    # at once.  Per-layer invocation lets one layer's DMA
+                    # overlap with another layer's compute, mirroring the
+                    # kv_exchange_copy usage in mla.py.  Up to 4 components per
+                    # launch; if the model has more conv states, split.
+                    device_bufs = [device_pool.mamba_cache.temporal] + list(
+                        device_pool.mamba_cache.conv
+                    )
+                    host_bufs = [self.temporal_buffer] + list(self.conv_buffer)
+                    if len(device_bufs) <= 4:
+                        _mamba_exchange_copy_h2d(
+                            device_bufs=device_bufs,
+                            host_bufs=host_bufs,
+                            device_indices=device_indices,
+                            host_indices=host_indices,
+                            layer_lo=layer_id,
+                            layer_hi=layer_id + 1,
+                        )
+                    else:
+                        # Too many components for a single kernel; fall back to
+                        # per-buffer per-layer calls.
+                        for dev_buf, host_buf in zip(device_bufs, host_bufs):
+                            _mamba_exchange_copy_h2d(
+                                device_bufs=[dev_buf],
+                                host_bufs=[host_buf],
+                                device_indices=device_indices,
+                                host_indices=host_indices,
+                                layer_lo=layer_id,
+                                layer_hi=layer_id + 1,
+                            )
+                elif transfer_mamba_state is not None:
+                    # NPU legacy per-buffer path: transfer all layers of each
+                    # state buffer via the dedicated kernel.  layer_id == 0
+                    # covers every layer, so later calls must skip.
+                    if layer_id == 0:
+                        transfer_mamba_state(
+                            device_buf=device_pool.mamba_cache.temporal,
+                            host_buf=self.temporal_buffer,
+                            device_indices=device_indices,
+                            host_indices=host_indices,
+                            direction=TransferDirection.H2D,
+                        )
+                        for conv_idx in range(len(self.conv_state_shapes)):
+                            transfer_mamba_state(
+                                device_buf=device_pool.mamba_cache.conv[conv_idx],
+                                host_buf=self.conv_buffer[conv_idx],
+                                device_indices=device_indices,
+                                host_indices=host_indices,
+                                direction=TransferDirection.H2D,
+                            )
+            else:
+                # no ssm state on conv-only models: nothing to transfer
+                if self.temporal_state_elem_size > 0:
+                    self._copy_tensor_pf_lf(
+                        src=self.temporal_buffer,
+                        dst=device_pool.mamba_cache.temporal[layer_id],
+                        src_indices=host_indices,
+                        dst_indices=device_indices,
+                        layer_id=layer_id,
+                        num_layers=self.num_mamba_layers,
+                        io_backend=io_backend,
+                    )
+                for conv_idx in range(len(self.conv_state_shapes)):
+                    self._copy_tensor_pf_lf(
+                        src=self.conv_buffer[conv_idx],
+                        dst=device_pool.mamba_cache.conv[conv_idx][layer_id],
+                        src_indices=host_indices,
+                        dst_indices=device_indices,
+                        layer_id=layer_id,
+                        num_layers=self.num_mamba_layers,
+                        io_backend=io_backend,
+                    )
         else:
             self._copy_tensor(
                 self.temporal_buffer[layer_id],
