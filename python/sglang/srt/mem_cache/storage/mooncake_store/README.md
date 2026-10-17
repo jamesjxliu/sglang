@@ -505,3 +505,19 @@ python3 [path of test_mooncake_store.py]
 ```
 
 If all tests pass, the message "✅ All tests passed" will be printed at the end.
+
+## Ascend MemFabric PD and L3
+
+For NPU deployments using HCCL and Mooncake TENT with the MemFabric transport,
+PD keeps using the process `MF_PROTOCOL`. Set `"protocol": "ascend"` and
+`"memfabric_protocol": "device_rdma"` in the Mooncake Store JSON or extra config
+to select an independent L3 Device RDMA engine. Select PD SDMA with
+`MF_PROTOCOL=device_sdma`, or PD Device RDMA with `MF_PROTOCOL=device_rdma`.
+The L3 override is restored after Store setup and does not change the PD engine.
+Without the optional field, L3 inherits `MF_PROTOCOL`.
+
+Enable `MC_USE_TENT=1`, set `MC_TENT_CONF` to a configuration that enables only
+MemFabric, and set `ENABLE_ASCEND_TRANSFER_WITH_MOONCAKE=true` for PD.
+This path warms HCCL after group creation and binds the NPU in the native
+initialization thread. A2/910B also needs a MemFabric version that correctly
+registers NPU pinned host buffers as host memory.

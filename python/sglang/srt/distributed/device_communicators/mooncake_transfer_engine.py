@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 import logging
 import os
+import threading
+from contextlib import contextmanager
 from typing import TYPE_CHECKING, Dict, List, Optional, Union
 
 from sglang.srt.environ import envs
@@ -21,6 +23,37 @@ logger = logging.getLogger(__name__)
 
 # Module-level shared engine instance, set by init_mooncake_transfer_engine().
 _mooncake_transfer_engine: Optional[MooncakeTransferEngine] = None
+
+
+_memfabric_init_lock = threading.RLock()
+
+
+@contextmanager
+def mooncake_ascend_init_context(protocol, device=None, memfabric_protocol=None):
+    """Bind ACL's thread context and scope TENT's process-wide MF_PROTOCOL."""
+    if protocol != "ascend" or os.getenv("MC_USE_TENT") != "1":
+        if memfabric_protocol is not None:
+            raise ValueError(
+                "memfabric_protocol requires protocol='ascend' and MC_USE_TENT=1"
+            )
+        yield
+        return
+    import torch
+
+    from sglang.srt.runtime_context import get_device
+
+    with _memfabric_init_lock:
+        torch.npu.set_device(get_device().gpu_id if device is None else device)
+        previous = os.environ.get("MF_PROTOCOL")
+        try:
+            if memfabric_protocol is not None:
+                os.environ["MF_PROTOCOL"] = memfabric_protocol
+            yield
+        finally:
+            if previous is None:
+                os.environ.pop("MF_PROTOCOL", None)
+            else:
+                os.environ["MF_PROTOCOL"] = previous
 
 
 def parse_ib_device_config(
@@ -208,13 +241,17 @@ class MooncakeTransferEngine:
             # Default is "rdma"; set MOONCAKE_PROTOCOL=efa on AWS EFA hardware.
             protocol = envs.MOONCAKE_PROTOCOL.get()
 
+        def initialize_engine():
+            with mooncake_ascend_init_context(protocol, device=self.gpu_id):
+                return self.engine.initialize(
+                    hostname,
+                    "P2PHANDSHAKE",
+                    protocol,
+                    device_name if device_name is not None else "",
+                )
+
         ret_value = run_with_deadline(
-            lambda: self.engine.initialize(
-                hostname,
-                "P2PHANDSHAKE",
-                protocol,
-                device_name if device_name is not None else "",
-            ),
+            initialize_engine,
             timeout_s=envs.SGLANG_DISAGGREGATION_ENGINE_INIT_TIMEOUT.get(),
             what=f"Mooncake TransferEngine.initialize({hostname!r}, {protocol!r}, {device_name!r})",
         )

@@ -11,6 +11,9 @@ from typing import Any, List, Optional, Tuple
 import requests
 import torch
 
+from sglang.srt.distributed.device_communicators.mooncake_transfer_engine import (
+    mooncake_ascend_init_context,
+)
 from sglang.srt.environ import envs
 from sglang.srt.mem_cache.hicache_storage import (
     HiCacheStorage,
@@ -105,6 +108,7 @@ class MooncakeStoreConfig:
     enable_ssd_offload: bool = False
     ssd_offload_path: Optional[str] = None
     tenant_id: str = DEFAULT_TENANT_ID
+    memfabric_protocol: Optional[str] = None
 
     @staticmethod
     def _resolve_local_hostname(overrides: Optional[dict] = None) -> str:
@@ -161,6 +165,7 @@ class MooncakeStoreConfig:
             # deployment that sets it, e.g. MOONCAKE_PROTOCOL=efa, is honored
             # when the config file omits "protocol".
             protocol=config.get("protocol", envs.MOONCAKE_PROTOCOL.get()),
+            memfabric_protocol=config.get("memfabric_protocol"),
             device_name=config.get("device_name", envs.MOONCAKE_DEVICE.default),
             master_server_address=config.get(
                 "master_server_address", envs.MOONCAKE_MASTER.default
@@ -241,6 +246,7 @@ class MooncakeStoreConfig:
             ),
             # See from_file(): honor MOONCAKE_PROTOCOL when "protocol" is omitted.
             protocol=extra_config.get("protocol", envs.MOONCAKE_PROTOCOL.get()),
+            memfabric_protocol=extra_config.get("memfabric_protocol"),
             device_name=extra_config.get("device_name", envs.MOONCAKE_DEVICE.default),
             master_server_address=extra_config.get(
                 "master_server_address", envs.MOONCAKE_MASTER.default
@@ -534,17 +540,21 @@ class MooncakeStore(HiCacheStorage, MooncakeBaseStore):
 
                 while True:
                     try:
-                        ret_code = self.store.setup(
-                            client_hostname,
-                            self.config.metadata_server,
-                            per_rank_global_segment_size,
-                            DEFAULT_LOCAL_BUFFER_SIZE,  # Zero copy interface does not need local buffer
+                        with mooncake_ascend_init_context(
                             self.config.protocol,
-                            device_name,
-                            self.config.master_server_address,
-                            transfer_engine,
-                            **setup_kwargs,
-                        )
+                            memfabric_protocol=self.config.memfabric_protocol,
+                        ):
+                            ret_code = self.store.setup(
+                                client_hostname,
+                                self.config.metadata_server,
+                                per_rank_global_segment_size,
+                                DEFAULT_LOCAL_BUFFER_SIZE,  # Zero copy interface does not need local buffer
+                                self.config.protocol,
+                                device_name,
+                                self.config.master_server_address,
+                                transfer_engine,
+                                **setup_kwargs,
+                            )
                         break
                     except TypeError as e:
                         unsupported_kwargs = [
