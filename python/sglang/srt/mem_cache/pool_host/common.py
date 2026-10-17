@@ -24,6 +24,8 @@ _CUDA_HOST_REGISTERED_RANGES_ATTR = "_sglang_cuda_host_registered_ranges"
 
 
 class HostTensorAllocator:
+    supports_pinned_memory = False
+
     def __init__(self):
         """Initialize the HostTensorAllocator."""
         self.dtype = None
@@ -361,6 +363,8 @@ def alloc_with_pin_memory(
     """
     Allocate tensor using PyTorch's built-in pin_memory flag.
     """
+    if allocator is not None and allocator.supports_pinned_memory:
+        return allocator.allocate(dims, dtype=dtype, device=device)
     buffer = torch.empty(dims, dtype=dtype, device=device, pin_memory=pin_memory)
     return buffer
 

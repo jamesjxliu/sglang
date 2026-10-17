@@ -42,6 +42,7 @@ class MooncakeHostTensorAllocator(HostTensorAllocator):
 
         self.allocator = MooncakeHostMemAllocator()
         self.ptr = None
+        self.supports_pinned_memory = os.getenv("MC_MEMFABRIC_SDMA_OFFLOAD_POOL") == "1"
 
     def allocate(
         self, dims: tuple, dtype: torch.dtype, device: str = "cpu"
@@ -51,6 +52,12 @@ class MooncakeHostTensorAllocator(HostTensorAllocator):
         """
         self.dims = dims
         self.dtype = dtype
+        if self.supports_pinned_memory:
+            from mooncake.memfabric_sdma_allocator import empty
+
+            tensor = empty(dims, dtype=dtype)
+            self.ptr = tensor.data_ptr()
+            return tensor
         size = 1
         for d in dims:
             size *= d
@@ -544,6 +551,10 @@ class MooncakeStore(HiCacheStorage, MooncakeBaseStore):
                             self.config.protocol,
                             memfabric_protocol=self.config.memfabric_protocol,
                         ):
+                            if os.getenv("MC_MEMFABRIC_SDMA_OFFLOAD_POOL") == "1":
+                                from mooncake.memfabric_sdma_allocator import initialize_sdma_host_pool
+
+                                initialize_sdma_host_pool()
                             ret_code = self.store.setup(
                                 client_hostname,
                                 self.config.metadata_server,
