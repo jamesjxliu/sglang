@@ -96,7 +96,8 @@ def init_parallel_runtime(
     """Initialize the parallel runtime once, after publishing configuration.
 
     Set up CPU thread binding, the current device, and the shared Mooncake
-    engine before creating process groups. Draft workers reuse their target's
+    engine around process-group creation. HCCL is warmed before Ascend TENT.
+    Draft workers reuse their target's
     groups and must not call this function.
     """
     global _PARALLEL_INITIALISED
@@ -134,7 +135,10 @@ def init_parallel_runtime(
             get_parallel().tp_rank,
         )
         raise
-    maybe_init_shared_mooncake_transfer_engine(gpu_id=get_device().gpu_id)
+    # HCCL must initialize before an Ascend device RDMA engine.
+    defer_mooncake = device == "npu" and backend == "hccl"
+    if not defer_mooncake:
+        maybe_init_shared_mooncake_transfer_engine(gpu_id=get_device().gpu_id)
 
     parallel = get_parallel()
     if device == "cpu":
@@ -149,6 +153,15 @@ def init_parallel_runtime(
         server_args=server_args,
         gpu_id=get_device().gpu_id,
     )
+
+    if defer_mooncake:
+        if os.getenv("MF_PROTOCOL") == "device_rdma":
+            from sglang.srt.distributed.device_communicators.npu_communicator import (
+                warmup_hccl,
+            )
+
+            warmup_hccl(get_device().gpu_id)
+        maybe_init_shared_mooncake_transfer_engine(gpu_id=get_device().gpu_id)
 
     # Pre-warm NCCL/RCCL/HCCL to eliminate cold-start latency in first request
     # Controlled by --pre-warm-nccl flag (default: enabled on AMD GPUs)
